@@ -246,42 +246,17 @@ EXCEPTION
 END;
 /
 
--- Trigger: Mark old journeys as INCOMPLETE on new TAP IN
+-- Trigger: Mark previous journeys as INCOMPLETE when customer taps in again
 CREATE OR REPLACE TRIGGER trg_journey_timeout
-FOR INSERT ON CARD_TAPS
-COMPOUND TRIGGER
-
-    TYPE t_rec IS RECORD (customer_id NUMBER, tap_id NUMBER);
-    TYPE t_list IS TABLE OF t_rec INDEX BY PLS_INTEGER;
-    g_taps t_list;
-    g_idx PLS_INTEGER := 0;
-
-AFTER EACH ROW IS
+BEFORE INSERT ON CARD_TAPS
+FOR EACH ROW
+WHEN (NEW.Tap_type = 'IN')
 BEGIN
-    IF :NEW.Tap_type = 'IN' THEN
-        g_idx := g_idx + 1;
-        g_taps(g_idx).customer_id := :NEW.Customer_card_id;
-        g_taps(g_idx).tap_id := :NEW.Tap_id;
-    END IF;
-END AFTER EACH ROW;
-
-AFTER STATEMENT IS
-BEGIN
-    FOR i IN 1 .. g_idx LOOP
-        UPDATE JOURNEY
-        SET Journey_status = 'INCOMPLETE'
-        WHERE Customer_card_id = g_taps(i).customer_id
-          AND Journey_status = 'IN_PROGRESS'
-          AND Check_out_tap IS NULL
-          AND Check_in_tap != g_taps(i).tap_id
-          AND Check_in_tap IN (
-              SELECT Tap_id FROM CARD_TAPS
-              WHERE Tap_datetime < SYSDATE - INTERVAL '4' HOUR
-          );
-    END LOOP;
-END AFTER STATEMENT;
-
-END trg_journey_timeout;
+    UPDATE JOURNEY
+    SET Journey_status = 'INCOMPLETE'
+    WHERE Customer_card_id = :NEW.Customer_card_id
+      AND Journey_status = 'IN_PROGRESS';
+END;
 /
 
 -- Insert test BANK_CARD data (triggers will create CUSTOMER records)
