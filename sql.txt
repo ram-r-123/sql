@@ -45,24 +45,21 @@ CREATE TABLE CUSTOMER (
 CREATE TABLE BANK_CARD (
     Bank_card_id NUMBER PRIMARY KEY,
     Expiry_date DATE NOT NULL,
-    Sufficient_funds_available CHAR(1) CHECK (Sufficient_funds_available IN ('Y', 'N')),
-    Payment_method_validity VARCHAR2(40) NOT NULL
+    Sufficient_funds_available CHAR(1) CHECK (Sufficient_funds_available IN ('Y', 'N'))
 );
 
 -- Create OYSTER_CARD table
 CREATE TABLE OYSTER_CARD (
     Oyster_id NUMBER PRIMARY KEY,
     Expiry_date DATE NOT NULL,
-    Credit_limit_not_exceeded CHAR(1) CHECK (Credit_limit_not_exceeded IN ('Y', 'N')),
-    Payment_method_validity VARCHAR2(40) NOT NULL
+    Credit_limit_not_exceeded CHAR(1) CHECK (Credit_limit_not_exceeded IN ('Y', 'N'))
 );
 
 -- Create PRINTED_TICKET table
 CREATE TABLE PRINTED_TICKET (
     Ticket_id NUMBER PRIMARY KEY,
     Expiry_date DATE NOT NULL,
-    Ticket_valid_for_stations_travelled CHAR(1) CHECK (Ticket_valid_for_stations_travelled IN ('Y', 'N')),
-    Payment_method_validity VARCHAR2(40) NOT NULL
+    Ticket_valid_for_stations_travelled CHAR(1) CHECK (Ticket_valid_for_stations_travelled IN ('Y', 'N'))
 );
 
 -- Create CARD_TAPS table
@@ -82,7 +79,7 @@ CREATE TABLE JOURNEY (
     Customer_card_id NUMBER NOT NULL,
     Check_in_tap NUMBER,
     Check_out_tap NUMBER,
-    Journey_status VARCHAR2(20) CHECK (Journey_status IN ('IN_PROGRESS', 'COMPLETED', 'INCOMPLETE')) NOT NULL,
+    Journey_status VARCHAR2(20) CHECK (Journey_status IN ('IN_PROGRESS', 'COMPLETED', 'INCOMPLETE', 'INVALID_PAYMENT')) NOT NULL,
     CONSTRAINT journey_customer_fk FOREIGN KEY (Customer_card_id) REFERENCES CUSTOMER (Customer_card_id),
     CONSTRAINT journey_check_in_fk FOREIGN KEY (Check_in_tap) REFERENCES CARD_TAPS (Tap_id),
     CONSTRAINT journey_check_out_fk FOREIGN KEY (Check_out_tap) REFERENCES CARD_TAPS (Tap_id)
@@ -144,65 +141,113 @@ INSERT INTO STATION_LINES (Station_id, Line_id) VALUES
     (7, 8),
     (8, 4);
 
--- Trigger: Insert BANK_CARD -> CUSTOMER
+-- Trigger: Insert BANK_CARD -> CUSTOMER (calculates validity from expiry and funds)
 CREATE OR REPLACE TRIGGER trg_bank_card_to_customer
 AFTER INSERT ON BANK_CARD
 FOR EACH ROW
+DECLARE
+    v_validity CHAR(1);
 BEGIN
+    IF :NEW.Expiry_date >= TRUNC(SYSDATE) AND :NEW.Sufficient_funds_available = 'Y' THEN
+        v_validity := 'Y';
+    ELSE
+        v_validity := 'N';
+    END IF;
+
     INSERT INTO CUSTOMER (Customer_card_id, Card_type, Payment_method_validity)
-    VALUES (:NEW.Bank_card_id, 'BANK', :NEW.Payment_method_validity);
+    VALUES (:NEW.Bank_card_id, 'BANK', v_validity);
 END;
 /
 
--- Trigger: Insert OYSTER_CARD -> CUSTOMER
+-- Trigger: Insert OYSTER_CARD -> CUSTOMER (calculates validity from expiry and credit)
 CREATE OR REPLACE TRIGGER trg_oyster_card_to_customer
 AFTER INSERT ON OYSTER_CARD
 FOR EACH ROW
+DECLARE
+    v_validity CHAR(1);
 BEGIN
+    IF :NEW.Expiry_date >= TRUNC(SYSDATE) AND :NEW.Credit_limit_not_exceeded = 'Y' THEN
+        v_validity := 'Y';
+    ELSE
+        v_validity := 'N';
+    END IF;
+
     INSERT INTO CUSTOMER (Customer_card_id, Card_type, Payment_method_validity)
-    VALUES (:NEW.Oyster_id, 'OYSTER', :NEW.Payment_method_validity);
+    VALUES (:NEW.Oyster_id, 'OYSTER', v_validity);
 END;
 /
 
--- Trigger: Insert PRINTED_TICKET -> CUSTOMER
+-- Trigger: Insert PRINTED_TICKET -> CUSTOMER (calculates validity from expiry and station validity)
 CREATE OR REPLACE TRIGGER trg_ticket_to_customer
 AFTER INSERT ON PRINTED_TICKET
 FOR EACH ROW
+DECLARE
+    v_validity CHAR(1);
 BEGIN
+    IF :NEW.Expiry_date >= TRUNC(SYSDATE) AND :NEW.Ticket_valid_for_stations_travelled = 'Y' THEN
+        v_validity := 'Y';
+    ELSE
+        v_validity := 'N';
+    END IF;
+
     INSERT INTO CUSTOMER (Customer_card_id, Card_type, Payment_method_validity)
-    VALUES (:NEW.Ticket_id, 'PRINTED', :NEW.Payment_method_validity);
+    VALUES (:NEW.Ticket_id, 'PRINTED', v_validity);
 END;
 /
 
--- Trigger: Sync BANK_CARD Payment_method_validity -> CUSTOMER
+-- Trigger: Sync BANK_CARD -> CUSTOMER (recalculates validity on update)
 CREATE OR REPLACE TRIGGER trg_bank_card_sync
-AFTER UPDATE OF Payment_method_validity ON BANK_CARD
+AFTER UPDATE OF Expiry_date, Sufficient_funds_available ON BANK_CARD
 FOR EACH ROW
+DECLARE
+    v_validity CHAR(1);
 BEGIN
+    IF :NEW.Expiry_date >= TRUNC(SYSDATE) AND :NEW.Sufficient_funds_available = 'Y' THEN
+        v_validity := 'Y';
+    ELSE
+        v_validity := 'N';
+    END IF;
+
     UPDATE CUSTOMER
-    SET Payment_method_validity = :NEW.Payment_method_validity
+    SET Payment_method_validity = v_validity
     WHERE Customer_card_id = :NEW.Bank_card_id;
 END;
 /
 
--- Trigger: Sync OYSTER_CARD Payment_method_validity -> CUSTOMER
+-- Trigger: Sync OYSTER_CARD -> CUSTOMER (recalculates validity on update)
 CREATE OR REPLACE TRIGGER trg_oyster_card_sync
-AFTER UPDATE OF Payment_method_validity ON OYSTER_CARD
+AFTER UPDATE OF Expiry_date, Credit_limit_not_exceeded ON OYSTER_CARD
 FOR EACH ROW
+DECLARE
+    v_validity CHAR(1);
 BEGIN
+    IF :NEW.Expiry_date >= TRUNC(SYSDATE) AND :NEW.Credit_limit_not_exceeded = 'Y' THEN
+        v_validity := 'Y';
+    ELSE
+        v_validity := 'N';
+    END IF;
+
     UPDATE CUSTOMER
-    SET Payment_method_validity = :NEW.Payment_method_validity
+    SET Payment_method_validity = v_validity
     WHERE Customer_card_id = :NEW.Oyster_id;
 END;
 /
 
--- Trigger: Sync PRINTED_TICKET Payment_method_validity -> CUSTOMER
+-- Trigger: Sync PRINTED_TICKET -> CUSTOMER (recalculates validity on update)
 CREATE OR REPLACE TRIGGER trg_ticket_sync
-AFTER UPDATE OF Payment_method_validity ON PRINTED_TICKET
+AFTER UPDATE OF Expiry_date, Ticket_valid_for_stations_travelled ON PRINTED_TICKET
 FOR EACH ROW
+DECLARE
+    v_validity CHAR(1);
 BEGIN
+    IF :NEW.Expiry_date >= TRUNC(SYSDATE) AND :NEW.Ticket_valid_for_stations_travelled = 'Y' THEN
+        v_validity := 'Y';
+    ELSE
+        v_validity := 'N';
+    END IF;
+
     UPDATE CUSTOMER
-    SET Payment_method_validity = :NEW.Payment_method_validity
+    SET Payment_method_validity = v_validity
     WHERE Customer_card_id = :NEW.Ticket_id;
 END;
 /
@@ -212,6 +257,9 @@ CREATE OR REPLACE TRIGGER trg_tap_in_create_journey
 AFTER INSERT ON CARD_TAPS
 FOR EACH ROW
 WHEN (NEW.Tap_type = 'IN')
+DECLARE
+    v_payment_valid CHAR(1);
+    v_status VARCHAR2(20);
 BEGIN
     -- Mark any existing IN_PROGRESS journeys as INCOMPLETE
     UPDATE JOURNEY
@@ -219,9 +267,20 @@ BEGIN
     WHERE Customer_card_id = :NEW.Customer_card_id
       AND Journey_status = 'IN_PROGRESS';
 
+    -- Check payment validity
+    SELECT Payment_method_validity INTO v_payment_valid
+    FROM CUSTOMER
+    WHERE Customer_card_id = :NEW.Customer_card_id;
+
+    IF v_payment_valid = 'Y' THEN
+        v_status := 'IN_PROGRESS';
+    ELSE
+        v_status := 'INVALID_PAYMENT';
+    END IF;
+
     -- Create new journey
     INSERT INTO JOURNEY (Customer_card_id, Check_in_tap, Journey_status)
-    VALUES (:NEW.Customer_card_id, :NEW.Tap_id, 'IN_PROGRESS');
+    VALUES (:NEW.Customer_card_id, :NEW.Tap_id, v_status);
 END;
 /
 
@@ -232,6 +291,8 @@ FOR EACH ROW
 WHEN (NEW.Tap_type = 'OUT')
 DECLARE
     v_journey_id NUMBER;
+    v_payment_valid CHAR(1);
+    v_status VARCHAR2(20);
 BEGIN
     SELECT Journey_id
     INTO v_journey_id
@@ -247,27 +308,37 @@ BEGIN
     WHERE Journey_id = v_journey_id;
 EXCEPTION
     WHEN NO_DATA_FOUND THEN
-        -- No in-progress journey found, create incomplete journey
+        -- No in-progress journey found, check payment validity
+        SELECT Payment_method_validity INTO v_payment_valid
+        FROM CUSTOMER
+        WHERE Customer_card_id = :NEW.Customer_card_id;
+
+        IF v_payment_valid = 'Y' THEN
+            v_status := 'INCOMPLETE';
+        ELSE
+            v_status := 'INVALID_PAYMENT';
+        END IF;
+
         INSERT INTO JOURNEY (Customer_card_id, Check_in_tap, Check_out_tap, Journey_status)
-        VALUES (:NEW.Customer_card_id, NULL, :NEW.Tap_id, 'INCOMPLETE');
+        VALUES (:NEW.Customer_card_id, NULL, :NEW.Tap_id, v_status);
 END;
 /
 
--- Insert test BANK_CARD data (triggers will create CUSTOMER records)
-INSERT INTO BANK_CARD (Bank_card_id, Expiry_date, Sufficient_funds_available, Payment_method_validity) VALUES
-    (1001, TO_DATE('01/01/2027', 'DD/MM/YYYY'), 'Y', 'Y'),
-    (1002, TO_DATE('01/01/2027', 'DD/MM/YYYY'), 'Y', 'Y'),
-    (1003, TO_DATE('01/01/2027', 'DD/MM/YYYY'), 'Y', 'Y'),
-    (1004, TO_DATE('01/01/2027', 'DD/MM/YYYY'), 'Y', 'Y'),
-    (1005, TO_DATE('01/01/2027', 'DD/MM/YYYY'), 'Y', 'Y');
+-- Insert test BANK_CARD data (triggers will create CUSTOMER records with calculated validity)
+INSERT INTO BANK_CARD (Bank_card_id, Expiry_date, Sufficient_funds_available) VALUES
+    (1001, TO_DATE('01/01/2027', 'DD/MM/YYYY'), 'Y'),
+    (1002, TO_DATE('01/01/2027', 'DD/MM/YYYY'), 'Y'),
+    (1003, TO_DATE('01/01/2027', 'DD/MM/YYYY'), 'Y'),
+    (1004, TO_DATE('01/01/2027', 'DD/MM/YYYY'), 'Y'),
+    (1005, TO_DATE('01/01/2027', 'DD/MM/YYYY'), 'Y');
 
 -- Insert test OYSTER_CARD data
-INSERT INTO OYSTER_CARD (Oyster_id, Expiry_date, Credit_limit_not_exceeded, Payment_method_validity)
-VALUES (2001, TO_DATE('01/01/2027', 'DD/MM/YYYY'), 'N', 'N');
+INSERT INTO OYSTER_CARD (Oyster_id, Expiry_date, Credit_limit_not_exceeded)
+VALUES (2001, TO_DATE('01/01/2027', 'DD/MM/YYYY'), 'N');
 
 -- Insert test PRINTED_TICKET data
-INSERT INTO PRINTED_TICKET (Ticket_id, Expiry_date, Ticket_valid_for_stations_travelled, Payment_method_validity)
-VALUES (3001, TO_DATE('06/11/2025', 'DD/MM/YYYY'), 'Y', 'N');
+INSERT INTO PRINTED_TICKET (Ticket_id, Expiry_date, Ticket_valid_for_stations_travelled)
+VALUES (3001, TO_DATE('06/11/2025', 'DD/MM/YYYY'), 'Y');
 
 -- Insert test CARD_TAPS data (triggers will create/update JOURNEY records)
 -- Note: Tap_id is auto-generated, Station_ids must exist in STATION table
