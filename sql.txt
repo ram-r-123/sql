@@ -79,7 +79,7 @@ CREATE TABLE JOURNEY (
     Customer_card_id NUMBER NOT NULL,
     Check_in_tap NUMBER,
     Check_out_tap NUMBER,
-    Journey_status VARCHAR2(20) CHECK (Journey_status IN ('IN_PROGRESS', 'COMPLETED', 'INCOMPLETE')) NOT NULL,
+    Journey_status VARCHAR2(20) CHECK (Journey_status IN ('IN_PROGRESS', 'COMPLETED', 'INCOMPLETE', 'INVALID_PAYMENT')) NOT NULL,
     CONSTRAINT journey_customer_fk FOREIGN KEY (Customer_card_id) REFERENCES CUSTOMER (Customer_card_id),
     CONSTRAINT journey_check_in_fk FOREIGN KEY (Check_in_tap) REFERENCES CARD_TAPS (Tap_id),
     CONSTRAINT journey_check_out_fk FOREIGN KEY (Check_out_tap) REFERENCES CARD_TAPS (Tap_id)
@@ -257,6 +257,9 @@ CREATE OR REPLACE TRIGGER trg_tap_in_create_journey
 AFTER INSERT ON CARD_TAPS
 FOR EACH ROW
 WHEN (NEW.Tap_type = 'IN')
+DECLARE
+    v_payment_valid CHAR(1);
+    v_status VARCHAR2(20);
 BEGIN
     -- Mark any existing IN_PROGRESS journeys as INCOMPLETE
     UPDATE JOURNEY
@@ -264,9 +267,20 @@ BEGIN
     WHERE Customer_card_id = :NEW.Customer_card_id
       AND Journey_status = 'IN_PROGRESS';
 
+    -- Check payment validity
+    SELECT Payment_method_validity INTO v_payment_valid
+    FROM CUSTOMER
+    WHERE Customer_card_id = :NEW.Customer_card_id;
+
+    IF v_payment_valid = 'Y' THEN
+        v_status := 'IN_PROGRESS';
+    ELSE
+        v_status := 'INVALID_PAYMENT';
+    END IF;
+
     -- Create new journey
     INSERT INTO JOURNEY (Customer_card_id, Check_in_tap, Journey_status)
-    VALUES (:NEW.Customer_card_id, :NEW.Tap_id, 'IN_PROGRESS');
+    VALUES (:NEW.Customer_card_id, :NEW.Tap_id, v_status);
 END;
 /
 
@@ -277,6 +291,8 @@ FOR EACH ROW
 WHEN (NEW.Tap_type = 'OUT')
 DECLARE
     v_journey_id NUMBER;
+    v_payment_valid CHAR(1);
+    v_status VARCHAR2(20);
 BEGIN
     SELECT Journey_id
     INTO v_journey_id
@@ -292,9 +308,19 @@ BEGIN
     WHERE Journey_id = v_journey_id;
 EXCEPTION
     WHEN NO_DATA_FOUND THEN
-        -- No in-progress journey found, create incomplete journey
+        -- No in-progress journey found, check payment validity
+        SELECT Payment_method_validity INTO v_payment_valid
+        FROM CUSTOMER
+        WHERE Customer_card_id = :NEW.Customer_card_id;
+
+        IF v_payment_valid = 'Y' THEN
+            v_status := 'INCOMPLETE';
+        ELSE
+            v_status := 'INVALID_PAYMENT';
+        END IF;
+
         INSERT INTO JOURNEY (Customer_card_id, Check_in_tap, Check_out_tap, Journey_status)
-        VALUES (:NEW.Customer_card_id, NULL, :NEW.Tap_id, 'INCOMPLETE');
+        VALUES (:NEW.Customer_card_id, NULL, :NEW.Tap_id, v_status);
 END;
 /
 
