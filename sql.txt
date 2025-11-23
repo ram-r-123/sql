@@ -291,24 +291,34 @@ FOR EACH ROW
 WHEN (NEW.Tap_type = 'OUT')
 DECLARE
     v_journey_id NUMBER;
+    v_current_status VARCHAR2(20);
     v_payment_valid CHAR(1);
     v_status VARCHAR2(20);
 BEGIN
-    SELECT Journey_id
-    INTO v_journey_id
+    -- Find the most recent journey without a check-out tap (IN_PROGRESS or INVALID_PAYMENT)
+    SELECT Journey_id, Journey_status
+    INTO v_journey_id, v_current_status
     FROM JOURNEY
     WHERE Customer_card_id = :NEW.Customer_card_id
-      AND Journey_status = 'IN_PROGRESS'
+      AND Journey_status IN ('IN_PROGRESS', 'INVALID_PAYMENT')
+      AND Check_out_tap IS NULL
     ORDER BY Check_in_tap DESC
     FETCH FIRST ROW ONLY;
 
+    -- Complete or keep invalid status based on current status
+    IF v_current_status = 'IN_PROGRESS' THEN
+        v_status := 'COMPLETED';
+    ELSE
+        v_status := 'INVALID_PAYMENT';
+    END IF;
+
     UPDATE JOURNEY
     SET Check_out_tap = :NEW.Tap_id,
-        Journey_status = 'COMPLETED'
+        Journey_status = v_status
     WHERE Journey_id = v_journey_id;
 EXCEPTION
     WHEN NO_DATA_FOUND THEN
-        -- No in-progress journey found, check payment validity
+        -- No journey found, check payment validity
         SELECT Payment_method_validity INTO v_payment_valid
         FROM CUSTOMER
         WHERE Customer_card_id = :NEW.Customer_card_id;
