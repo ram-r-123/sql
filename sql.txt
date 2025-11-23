@@ -207,12 +207,19 @@ BEGIN
 END;
 /
 
--- Trigger: Create journey on TAP IN
+-- Trigger: Create journey on TAP IN (and mark any previous IN_PROGRESS as INCOMPLETE)
 CREATE OR REPLACE TRIGGER trg_tap_in_create_journey
 AFTER INSERT ON CARD_TAPS
 FOR EACH ROW
 WHEN (NEW.Tap_type = 'IN')
 BEGIN
+    -- Mark any existing IN_PROGRESS journeys as INCOMPLETE
+    UPDATE JOURNEY
+    SET Journey_status = 'INCOMPLETE'
+    WHERE Customer_card_id = :NEW.Customer_card_id
+      AND Journey_status = 'IN_PROGRESS';
+
+    -- Create new journey
     INSERT INTO JOURNEY (Customer_card_id, Check_in_tap, Journey_status)
     VALUES (:NEW.Customer_card_id, :NEW.Tap_id, 'IN_PROGRESS');
 END;
@@ -243,19 +250,6 @@ EXCEPTION
         -- No in-progress journey found, create incomplete journey
         INSERT INTO JOURNEY (Customer_card_id, Check_in_tap, Check_out_tap, Journey_status)
         VALUES (:NEW.Customer_card_id, NULL, :NEW.Tap_id, 'INCOMPLETE');
-END;
-/
-
--- Trigger: Mark previous journeys as INCOMPLETE when customer taps in again
-CREATE OR REPLACE TRIGGER trg_journey_timeout
-BEFORE INSERT ON CARD_TAPS
-FOR EACH ROW
-WHEN (NEW.Tap_type = 'IN')
-BEGIN
-    UPDATE JOURNEY
-    SET Journey_status = 'INCOMPLETE'
-    WHERE Customer_card_id = :NEW.Customer_card_id
-      AND Journey_status = 'IN_PROGRESS';
 END;
 /
 
